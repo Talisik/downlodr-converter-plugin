@@ -9,7 +9,12 @@ const formatConverter = {
   taskBarItemIds: [],
 
   isPaused: false,
+  isProcessing: false,
+
   downloadItems: [],
+
+  queueKey: 'formatConverter_queue',
+  formatKey: 'formatConverter_format',
 
   /**
    * Plugin initialization
@@ -39,7 +44,8 @@ const formatConverter = {
       icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14 8C14 6.4087 13.3679 4.88258 12.2426 3.75736C11.1174 2.63214 9.5913 2 8 2C6.32263 2.00631 4.71265 2.66082 3.50667 3.82667L2 5.33333M2 5.33333V2M2 5.33333H5.33333M2 8C2 9.5913 2.63214 11.1174 3.75736 12.2426C4.88258 13.3679 6.4087 14 8 14C9.67737 13.9937 11.2874 13.3392 12.4933 12.1733L14 10.6667M14 10.6667H10.6667M14 10.6667V14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
       iconStyle: { marginTop: '2px' },
       buttonStyle: {
-        display: isButtonRegistered && taskBarItemIds.length > 0 ? 'none' : 'flex',
+        display:
+          isButtonRegistered && taskBarItemIds.length > 0 ? 'none' : 'flex',
       },
       context: 'download',
       onClick: (contextData) => this.showFormatSelector(contextData),
@@ -143,10 +149,28 @@ const formatConverter = {
           selectedItems.find((selected) => selected.id === item.id)?.selected
       );
 
-      // Process each selected download item
-      for (let index = 0; index < itemsToConvert.length; index++) {
-        const item = itemsToConvert[index];
-        this.handleUseYTDLP(item, selectedFormat);
+      // Store conversion queue in session storage
+      let existingQueue = JSON.parse(
+        sessionStorage.getItem(this.queueKey) || '[]'
+      );
+      existingQueue = [...existingQueue, ...itemsToConvert];
+      sessionStorage.setItem(this.queueKey, JSON.stringify(existingQueue));
+      sessionStorage.setItem(this.formatKey, selectedFormat);
+
+      // Start processing if there are items to convert
+      if (itemsToConvert.length > 0) {
+        this.isProcessing = true;
+        this.isPaused = false;
+        this.api.ui.showNotification({
+          title: 'Starting Conversion',
+          message: `Processing first batch of ${Math.min(
+            5,
+            itemsToConvert.length
+          )} items`,
+          type: 'default',
+          duration: 3000,
+        });
+        await this.processBatch();
       }
 
       // Replace task bar buttons if there are multiple conversions
@@ -187,7 +211,9 @@ const formatConverter = {
     }
   },
 
-  // Replace the task bar buttons with the conversion status, pause, resume, and stop buttons
+  /**
+   * Replace the task bar buttons with the conversion status, pause, resume, and stop buttons
+   */
   async replaceTaskBarButtons() {
     this.api.ui.setTaskBarButtonsVisibility({
       start: false,
@@ -283,7 +309,9 @@ const formatConverter = {
     await window.plugins.reload();
   },
 
-  // Reset the task bar buttons to the default state
+  /**
+   * Reset the task bar buttons to the default state
+   */
   async resetTaskBarButtons() {
     await this.api.ui.unregisterTaskBarItem('format-converter');
     this.api.ui.unregisterTaskBarItem('format-converter-status');
@@ -300,9 +328,11 @@ const formatConverter = {
     });
   },
 
-  // Handle resume button click
+  /**
+   * Resume paused conversions if there are items in the queue
+   */
   async handleResume(contextData) {
-    this.isPaused = !this.isPaused;
+    this.isPaused = false;
     await this.replaceTaskBarButtons();
 
     const result = await this.api.downloads.resumeAllDownloads(contextData);
@@ -314,6 +344,15 @@ const formatConverter = {
         type: 'default',
         duration: 3000,
       });
+
+      // Resume processing the queue if there are items
+      if (!this.isProcessing) {
+        const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
+        if (queue.length > 0) {
+          this.isProcessing = true;
+          await this.processBatch();
+        }
+      }
     } else {
       this.api.ui.showNotification({
         title: 'Failed to resume conversions',
@@ -324,9 +363,12 @@ const formatConverter = {
     }
   },
 
-  // Handle pause button click
+  /**
+   * Pause all ongoing and queued conversions
+   */
   async handlePause(contextData) {
-    this.isPaused = !this.isPaused;
+    this.isPaused = true;
+    this.isProcessing = false;
     await this.replaceTaskBarButtons();
 
     const result = await this.api.downloads.pauseAllDownloads(contextData);
@@ -348,11 +390,18 @@ const formatConverter = {
     }
   },
 
-  // Handle stop all button click
+  /**
+   * Stop all ongoing and queued conversions
+   */
   async handleStop(contextData) {
     const result = await this.api.downloads.stopAllDownloads(contextData);
 
     if (result) {
+      // Clear the queue from session storage
+      sessionStorage.removeItem('formatConverter_queue');
+      sessionStorage.removeItem('formatConverter_format');
+      this.isProcessing = false;
+
       this.api.ui.showNotification({
         title: 'Conversion Stopped',
         message: `All ongoing conversion processes have been stopped`,
@@ -362,13 +411,98 @@ const formatConverter = {
     } else {
       this.api.ui.showNotification({
         title: 'Failed to stop conversions',
-        message: result.error || `An error occurred while stopping conversions`,
+        message: result?.error || `An error occurred while stopping conversions`,
         type: 'destructive',
         duration: 3000,
       });
     }
 
     await this.resetTaskBarButtons();
+  },
+
+  /**
+   * Process conversions in batches of 5
+   */
+  async processBatch() {
+    if (this.isPaused || !this.isProcessing) {
+      return;
+    }
+
+    const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
+    const format = sessionStorage.getItem(this.formatKey);
+
+    if (queue.length === 0) {
+      // Clean up storage if queue is empty
+      sessionStorage.removeItem(this.queueKey);
+      sessionStorage.removeItem(this.formatKey);
+      this.isProcessing = false;
+      await this.resetTaskBarButtons();
+      return;
+    }
+
+    // Take first 5 items
+    const currentBatch = queue.slice(0, 5);
+    const remainingQueue = queue.slice(5);
+    sessionStorage.setItem(this.queueKey, JSON.stringify(remainingQueue));
+
+    // Update status display
+    this.downloadItems = currentBatch;
+    let buttonsReplaced = false;
+
+    // Process current batch
+    for (let index = 0; index < currentBatch.length; index++) {
+      if (this.isPaused || !this.isProcessing) {
+        return;
+      }
+      const item = currentBatch[index];
+      this.handleUseYTDLP(item, format);
+    }
+
+    // Monitor batch completion
+    const batchInterval = setInterval(async () => {
+      if (this.isPaused || !this.isProcessing) {
+        clearInterval(batchInterval);
+        return;
+      }
+
+      const activeDownloads = this.api.downloads.getActiveDownloads();
+
+      // Replace buttons when downloads start
+      if (!buttonsReplaced && activeDownloads.length > 0) {
+        await this.replaceTaskBarButtons(currentBatch);
+        buttonsReplaced = true;
+      }
+
+      // When current batch is complete
+      if (buttonsReplaced && activeDownloads.length === 0) {
+        clearInterval(batchInterval);
+
+        // Process next batch if there are items remaining
+        if (remainingQueue.length > 0 && !this.isPaused && this.isProcessing) {
+          this.api.ui.showNotification({
+            title: 'Batch Complete',
+            message: `Processing next batch of ${Math.min(
+              5,
+              remainingQueue.length
+            )} items`,
+            type: 'default',
+            duration: 3000,
+          });
+          await this.processBatch();
+        } else if (remainingQueue.length === 0) {
+          this.api.ui.showNotification({
+            title: 'Conversion Complete',
+            message: 'All items have been converted',
+            type: 'default',
+            duration: 3000,
+          });
+          this.isProcessing = false;
+          await this.resetTaskBarButtons();
+          sessionStorage.removeItem(this.queueKey);
+          sessionStorage.removeItem(this.formatKey);
+        }
+      }
+    }, 1000);
   },
 
   /**
