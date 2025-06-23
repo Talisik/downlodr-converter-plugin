@@ -190,6 +190,7 @@ const formatConverter = {
           // Then, check if all conversions are complete to reset the task bar buttons
           if (buttonsReplaced && activeDownloads.length === 0) {
             await this.resetTaskBarButtons();
+            await this.cleanupState();
             clearInterval(interval);
           }
         }, 1000);
@@ -243,8 +244,8 @@ const formatConverter = {
       label: 'Resume',
       icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g clip-path="url(#clip0_3130_147)">
-      <path d="M8.00065 14.6673C11.6825 14.6673 14.6673 11.6825 14.6673 8.00065C14.6673 4.31875 11.6825 1.33398 8.00065 1.33398C4.31875 1.33398 1.33398 4.31875 1.33398 8.00065C1.33398 11.6825 4.31875 14.6673 8.00065 14.6673Z" stroke="#16161E" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M6.66732 5.33398L10.6673 8.00065L6.66732 10.6673V5.33398Z" stroke="#16161E" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M8.00065 14.6673C11.6825 14.6673 14.6673 11.6825 14.6673 8.00065C14.6673 4.31875 11.6825 1.33398 8.00065 1.33398C4.31875 1.33398 1.33398 4.31875 1.33398 8.00065C1.33398 11.6825 4.31875 14.6673 8.00065 14.6673Z"  stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6.66732 5.33398L10.6673 8.00065L6.66732 10.6673V5.33398Z"  stroke-linecap="round" stroke-linejoin="round"/>
       </g>
       <defs>
       <clipPath id="clip0_3130_147">
@@ -269,8 +270,8 @@ const formatConverter = {
       id: 'format-converter-pause',
       label: 'Pause',
       icon: `<svg width="10" height="14" viewBox="0 0 10 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M3.66667 1.66797H1V12.3346H3.66667V1.66797Z" stroke="#16161E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M9 1.66797H6.33333V12.3346H9V1.66797Z" stroke="#16161E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M3.66667 1.66797H1V12.3346H3.66667V1.66797Z"  stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M9 1.66797H6.33333V12.3346H9V1.66797Z"  stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`,
       context: 'download',
       buttonStyle: {
@@ -288,8 +289,8 @@ const formatConverter = {
       id: 'format-converter-stop',
       label: 'Stop All',
       icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M8.0026 14.6654C11.6845 14.6654 14.6693 11.6806 14.6693 7.9987C14.6693 4.3168 11.6845 1.33203 8.0026 1.33203C4.32071 1.33203 1.33594 4.3168 1.33594 7.9987C1.33594 11.6806 4.32071 14.6654 8.0026 14.6654Z" stroke="#16161E" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M10.0026 5.9987H6.0026V9.9987H10.0026V5.9987Z" stroke="#16161E" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M8.0026 14.6654C11.6845 14.6654 14.6693 11.6806 14.6693 7.9987C14.6693 4.3168 11.6845 1.33203 8.0026 1.33203C4.32071 1.33203 1.33594 4.3168 1.33594 7.9987C1.33594 11.6806 4.32071 14.6654 8.0026 14.6654Z"  stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M10.0026 5.9987H6.0026V9.9987H10.0026V5.9987Z"  stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`,
       context: 'download',
       buttonStyle: { border: '1px solid #D1D5DB' },
@@ -397,11 +398,7 @@ const formatConverter = {
     const result = await this.api.downloads.stopAllDownloads(contextData);
 
     if (result) {
-      // Clear the queue from session storage
-      sessionStorage.removeItem('formatConverter_queue');
-      sessionStorage.removeItem('formatConverter_format');
-      this.isProcessing = false;
-
+      await this.cleanupState();
       this.api.ui.showNotification({
         title: 'Conversion Stopped',
         message: `All ongoing conversion processes have been stopped`,
@@ -411,7 +408,8 @@ const formatConverter = {
     } else {
       this.api.ui.showNotification({
         title: 'Failed to stop conversions',
-        message: result?.error || `An error occurred while stopping conversions`,
+        message:
+          result?.error || `An error occurred while stopping conversions`,
         type: 'destructive',
         duration: 3000,
       });
@@ -432,10 +430,7 @@ const formatConverter = {
     const format = sessionStorage.getItem(this.formatKey);
 
     if (queue.length === 0) {
-      // Clean up storage if queue is empty
-      sessionStorage.removeItem(this.queueKey);
-      sessionStorage.removeItem(this.formatKey);
-      this.isProcessing = false;
+      await this.cleanupState();
       await this.resetTaskBarButtons();
       return;
     }
@@ -496,13 +491,23 @@ const formatConverter = {
             type: 'default',
             duration: 3000,
           });
-          this.isProcessing = false;
+          await this.cleanupState();
           await this.resetTaskBarButtons();
-          sessionStorage.removeItem(this.queueKey);
-          sessionStorage.removeItem(this.formatKey);
         }
       }
     }, 1000);
+  },
+
+  /**
+   * Clean up all states and storage
+   */
+  async cleanupState() {
+    sessionStorage.removeItem(this.queueKey);
+    sessionStorage.removeItem(this.formatKey);
+    this.isProcessing = false;
+    this.downloadItems = [];
+    this.isPaused = false;
+    this.totalItems = 0;
   },
 
   /**
