@@ -176,7 +176,6 @@ const formatConverter = {
       // Replace task bar buttons if there are multiple conversions
       if (itemsToConvert.length > 1) {
         let buttonsReplaced = false;
-        this.downloadItems = itemsToConvert;
 
         const interval = setInterval(async () => {
           const activeDownloads = this.api.downloads.getActiveDownloads();
@@ -259,6 +258,7 @@ const formatConverter = {
         border: '1px solid #D1D5DB',
         cursor: this.isPaused ? 'pointer' : 'not-allowed',
         opacity: this.isPaused ? 1 : 0.5,
+        pointerEvents: this.isPaused ? 'auto' : 'none',
       },
       iconStyle: { marginTop: '2px' },
       labelStyle: { fontSize: '12px' },
@@ -278,6 +278,7 @@ const formatConverter = {
         border: '1px solid #D1D5DB',
         cursor: !this.isPaused ? 'pointer' : 'not-allowed',
         opacity: !this.isPaused ? 1 : 0.5,
+        pointerEvents: !this.isPaused ? 'auto' : 'none',
       },
       iconStyle: { marginTop: '2px' },
       labelStyle: { fontSize: '12px' },
