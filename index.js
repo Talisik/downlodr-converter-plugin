@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.0.0',
+  version: '1.0.3',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -734,6 +734,7 @@ const formatConverter = {
       // Get output directory
       const directoryPath = contextData.location.replace(/[\/\\][^\/\\]*$/, '');
       // Store in FormatConverter subfolder
+      console.log('directoryPath:', contextData.location);
       const finalDirectoryPath = `${contextData.location}/FormatConverter/`;
 
       // Create output filename

@@ -1,7 +1,7 @@
 {
   "id": "format-converter-downlodr",
   "name": "Format Converter",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Converts videos to different formats using customizable quality and settings.\n This essential tool eliminates the need for separate conversion software, streamlining your workflow in one integrated solution. \n With support for all major video and audio formats, this plugin offers preset configurations for different devices while allowing advanced users to customize encoding parameters for perfect results every time. Whether you're converting videos for social media, mobile devices, or professional editing, Format Converter delivers high-quality output with minimal effort.",
   "main": "index.js",
   "author": "Downlodr",
