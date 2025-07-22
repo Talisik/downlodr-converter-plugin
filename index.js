@@ -734,7 +734,7 @@ const formatConverter = {
       // Get output directory
       const directoryPath = contextData.location.replace(/[\/\\][^\/\\]*$/, '');
       // Store in FormatConverter subfolder
-      const finalDirectoryPath = `${directoryPath}/FormatConverter/`;
+      const finalDirectoryPath = `${contextData.location}/FormatConverter/`;
 
       // Create output filename
       const baseName = contextData.name.replace(/\.[^/.]+$/, '');
