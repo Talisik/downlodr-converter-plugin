@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.0.3',
+  version: '1.0.4',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -330,40 +330,65 @@ const formatConverter = {
     });
   },
 
-  /**
-   * Resume paused conversions if there are items in the queue
-   */
-  async handleResume(contextData) {
-    this.isPaused = false;
-    await this.replaceTaskBarButtons();
 
-    const result = await this.api.downloads.resumeAllDownloads(contextData);
+/**
+ * Resume paused conversions if there are items in the queue
+ * Now includes automatic cleanup for problematic formats like m4a
+ */
+async handleResume(contextData) {
+  this.isPaused = false;
+  await this.replaceTaskBarButtons();
 
-    if (result.success) {
-      this.api.ui.showNotification({
-        title: 'Conversion Resumed',
-        message: `All ongoing conversion processes have been resumed`,
-        type: 'default',
-        duration: 3000,
-      });
+  const cleanupFormats = ['m4a', 'aac'];
 
-      // Resume processing the queue if there are items
-      if (!this.isProcessing) {
-        const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
-        if (queue.length > 0) {
-          this.isProcessing = true;
-          await this.processBatch();
-        }
-      }
-    } else {
-      this.api.ui.showNotification({
-        title: 'Failed to resume conversions',
-        message: `An error occurred while resuming conversions`,
-        type: 'destructive',
-        duration: 3000,
-      });
+  const result = await this.api.downloads.resumeAllDownloadsWithCleanup(cleanupFormats);
+
+  if (result.success) {
+    // success message
+    let message = `${result.resumedCount} conversions resumed successfully`;
+    
+    if (result.cleanupCount > 0) {
+      message += `. Cleaned up ${result.cleanupCount} corrupted file(s)`;
     }
-  },
+
+    this.api.ui.showNotification({
+      title: 'Conversions Resumed',
+      message: message,
+      type: 'success',
+      duration: 3000,
+    });
+    /*
+    console.log('Resume Results:', {
+      total: result.totalDownloads,
+      resumed: result.resumedCount,
+      failed: result.failedCount,
+      cleanedUp: result.cleanupCount,
+      details: result.results
+    });
+    */
+    // Resume processing the queue if there are items
+    if (!this.isProcessing) {
+      const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
+      if (queue.length > 0) {
+        this.isProcessing = true;
+        await this.processBatch();
+      }
+    }
+  } else {
+    let errorMessage = 'An error occurred while resuming conversions';
+    
+    if (result.cleanupCount > 0) {
+      errorMessage += `. ${result.cleanupCount} files were cleaned up, but ${result.failedCount} conversions failed to resume`;
+    }
+
+    this.api.ui.showNotification({
+      title: 'Failed to Resume Conversions',
+      message: errorMessage,
+      type: 'error',
+      duration: 5000,
+    });
+  }
+},
 
   /**
    * Pause all ongoing and queued conversions
