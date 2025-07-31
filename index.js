@@ -138,10 +138,7 @@ const formatConverter = {
       // User cancelled selection
       if (!formatResult) return;
 
-      const { selectedFormat, keepOriginal, selectedItems } = formatResult;
-      console.log(
-        `Selected format: ${selectedFormat}, Keep original: ${keepOriginal}`
-      );
+      const { selectedFormat, selectedItems } = formatResult;
 
       // Filter download items based on user selection (use id, not videoUrl)
       const itemsToConvert = downloadItemsWithId.filter(
@@ -222,7 +219,9 @@ const formatConverter = {
     });
 
     const getStatusText = () => {
-      return `Converting ${this.downloadItems.length} files`;
+      const totalItems = this.downloadItems.length;
+
+      return `Converting ${totalItems} ${totalItems === 1 ? 'file' : 'files'}`;
     };
 
     const conversionStatusItemId = await this.api.ui.registerTaskBarItem({
@@ -330,34 +329,35 @@ const formatConverter = {
     });
   },
 
+  /**
+   * Resume paused conversions if there are items in the queue
+   * Now includes automatic cleanup for problematic formats like m4a
+   */
+  async handleResume(contextData) {
+    this.isPaused = false;
+    await this.replaceTaskBarButtons();
 
-/**
- * Resume paused conversions if there are items in the queue
- * Now includes automatic cleanup for problematic formats like m4a
- */
-async handleResume(contextData) {
-  this.isPaused = false;
-  await this.replaceTaskBarButtons();
+    const cleanupFormats = ['m4a', 'aac'];
 
-  const cleanupFormats = ['m4a', 'aac'];
+    const result = await this.api.downloads.resumeAllDownloadsWithCleanup(
+      cleanupFormats
+    );
 
-  const result = await this.api.downloads.resumeAllDownloadsWithCleanup(cleanupFormats);
+    if (result.success) {
+      // success message
+      let message = `${result.resumedCount} conversions resumed successfully`;
 
-  if (result.success) {
-    // success message
-    let message = `${result.resumedCount} conversions resumed successfully`;
-    
-    if (result.cleanupCount > 0) {
-      message += `. Cleaned up ${result.cleanupCount} corrupted file(s)`;
-    }
+      if (result.cleanupCount > 0) {
+        message += `. Cleaned up ${result.cleanupCount} corrupted file(s)`;
+      }
 
-    this.api.ui.showNotification({
-      title: 'Conversions Resumed',
-      message: message,
-      type: 'success',
-      duration: 3000,
-    });
-    /*
+      this.api.ui.showNotification({
+        title: 'Conversions Resumed',
+        message: message,
+        type: 'success',
+        duration: 3000,
+      });
+      /*
     console.log('Resume Results:', {
       total: result.totalDownloads,
       resumed: result.resumedCount,
@@ -366,29 +366,29 @@ async handleResume(contextData) {
       details: result.results
     });
     */
-    // Resume processing the queue if there are items
-    if (!this.isProcessing) {
-      const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
-      if (queue.length > 0) {
-        this.isProcessing = true;
-        await this.processBatch();
+      // Resume processing the queue if there are items
+      if (!this.isProcessing) {
+        const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
+        if (queue.length > 0) {
+          this.isProcessing = true;
+          await this.processBatch();
+        }
       }
-    }
-  } else {
-    let errorMessage = 'An error occurred while resuming conversions';
-    
-    if (result.cleanupCount > 0) {
-      errorMessage += `. ${result.cleanupCount} files were cleaned up, but ${result.failedCount} conversions failed to resume`;
-    }
+    } else {
+      let errorMessage = 'An error occurred while resuming conversions';
 
-    this.api.ui.showNotification({
-      title: 'Failed to Resume Conversions',
-      message: errorMessage,
-      type: 'error',
-      duration: 5000,
-    });
-  }
-},
+      if (result.cleanupCount > 0) {
+        errorMessage += `. ${result.cleanupCount} files were cleaned up, but ${result.failedCount} conversions failed to resume`;
+      }
+
+      this.api.ui.showNotification({
+        title: 'Failed to Resume Conversions',
+        message: errorMessage,
+        type: 'error',
+        duration: 5000,
+      });
+    }
+  },
 
   /**
    * Pause all ongoing and queued conversions
@@ -466,8 +466,10 @@ async handleResume(contextData) {
     const remainingQueue = queue.slice(5);
     sessionStorage.setItem(this.queueKey, JSON.stringify(remainingQueue));
 
+    const activeDownloads = this.api.downloads.getActiveDownloads();
+
     // Update status display
-    this.downloadItems = currentBatch;
+    this.downloadItems = [...activeDownloads, ...currentBatch];
     let buttonsReplaced = false;
 
     // Process current batch
@@ -486,11 +488,9 @@ async handleResume(contextData) {
         return;
       }
 
-      const activeDownloads = this.api.downloads.getActiveDownloads();
-
       // Replace buttons when downloads start
       if (!buttonsReplaced && activeDownloads.length > 0) {
-        await this.replaceTaskBarButtons(currentBatch);
+        await this.replaceTaskBarButtons();
         buttonsReplaced = true;
       }
 
