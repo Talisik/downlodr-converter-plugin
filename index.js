@@ -222,7 +222,9 @@ const formatConverter = {
     });
 
     const getStatusText = () => {
-      return `Converting ${this.downloadItems.length} files`;
+      const totalItems = this.downloadItems.length;
+
+      return `Converting ${totalItems} ${totalItems === 1 ? 'file' : 'files'}`;
     };
 
     const conversionStatusItemId = await this.api.ui.registerTaskBarItem({
