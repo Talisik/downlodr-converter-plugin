@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.0.4',
+  version: '1.0.6',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
