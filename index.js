@@ -111,7 +111,7 @@ const formatConverter = {
         ...item,
         id: item.id || `${item.location}__${item.name}__${idx}`,
       }));
-      console.log(contextData);
+      console.log(contextData.osType);
       // Detect operating system and prepare format list
       const isDarwin = contextData.osType==='macos';
       console.log(isDarwin);
@@ -131,7 +131,7 @@ const formatConverter = {
 
       // Show format selector
       const formatResult = await this.api.ui.showFormatSelector({
-        title: 'Choose Format to Convert',
+        title: `Choose Format to Convert - ${contextData.osType}`,
         formats: availableFormats,
         keepOriginal: false,
         selectedItems: downloadItemsWithId.map((item) => ({
