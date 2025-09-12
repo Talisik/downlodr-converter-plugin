@@ -150,9 +150,6 @@ const formatConverter = {
       if (!formatResult) return;
 
       const { selectedFormat, keepOriginal, selectedItems } = formatResult;
-      console.log(
-        `Selected format: ${selectedFormat}, Keep original: ${keepOriginal}`
-      );
 
       // Filter download items based on user selection (use id, not videoUrl)
       const itemsToConvert = downloadItemsWithId.filter(
@@ -269,7 +266,9 @@ const formatConverter = {
     });
 
     const getStatusText = () => {
-      return `Converting ${this.downloadItems.length} files`;
+      const totalItems = this.downloadItems.length;
+
+      return `Converting ${totalItems} ${totalItems === 1 ? 'file' : 'files'}`;
     };
 
     const conversionStatusItemId = await this.api.ui.registerTaskBarItem({
@@ -792,12 +791,8 @@ async handleResume(contextData) {
         });
         return;
       }
-
-      console.log('handleUseYTDLP called with extension:', requestedExt);
-
       // Default to mp3
       requestedExt = requestedExt || 'mp3';
-      console.log('Final requestedExt:', requestedExt);
 
       this.api.ui.showNotification({
         title: 'Converting Format',
@@ -808,11 +803,27 @@ async handleResume(contextData) {
 
       const videoInfo = await this.api.downloads.getInfo(contextData.videoUrl);
 
-      // Get output directory
-      const directoryPath = contextData.location.replace(/[\/\\][^\/\\]*$/, '');
-      // Store in FormatConverter subfolder
-      console.log('directoryPath:', contextData.location);
-      const finalDirectoryPath = `${contextData.location}/FormatConverter/`;
+      // Define file extensions you want to match
+      const videoExtensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.m4a', '.mp3'];
+
+      // Get the last portion of the path
+      const pathParts = contextData.location.split(/[/\\]/);
+      const lastPart = pathParts[pathParts.length - 1] || '';
+
+      // Check if the last part is a file (ends with .ext)
+      const isFile = videoExtensions.some(ext => lastPart.toLowerCase().endsWith(ext));
+
+      // If it's a file, remove the last portion of the path
+      const directoryPath = isFile
+        ? contextData.location.replace(/[\/\\][^\/\\]*$/, '') // Remove last path segment
+        : contextData.location;
+
+      const finalDirectoryPath = `${directoryPath}/FormatConverter/`;
+      const fileExist = await this.api.downloads.isFolderExist
+      if(!fileExist){
+        const folderCreated = await this.api.downloads.createFolder
+        console.log(folderCreated);
+      }
 
       // Create output filename
       const baseName = contextData.name.replace(/\.[^/.]+$/, '');
@@ -832,8 +843,6 @@ async handleResume(contextData) {
           ) || processedFormats.audioOptions[0];
 
         const formatId = audioOption ? audioOption.formatId : '0';
-        console.log('Selected audio formatId:', formatId);
-
         // Audio download config
         downloadOptions = {
           name: fileName,
@@ -854,9 +863,6 @@ async handleResume(contextData) {
           getThumbnail: false,
         };
       } else {
-        // Video download config
-        console.log('Using default video formatId:', videoInfo.data.format_id);
-
         downloadOptions = {
           name: fileName,
           downloadName: fileName,
@@ -877,12 +883,6 @@ async handleResume(contextData) {
           duration: videoInfo.duration,
         };
       }
-
-      console.log(
-        'Final download options:',
-        JSON.stringify(downloadOptions, null, 2)
-      );
-
       // Start the conversion download
       await this.api.downloads.addDownload(
         contextData.videoUrl,
