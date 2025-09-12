@@ -829,7 +829,7 @@ async handleResume(contextData) {
       const baseName = contextData.name.replace(/\.[^/.]+$/, '');
       const fileName = baseName.startsWith('🎞️')
         ? `${baseName}_${requestedExt}.${requestedExt}`
-        : `🎞️ ${baseName}_${requestedExt}.${requestedExt}`;
+        : `🎞️ ${baseName}_${requestedExt}-converted.${requestedExt}`;
       let downloadOptions = {};
 
       // Setup options based on audio or video format
