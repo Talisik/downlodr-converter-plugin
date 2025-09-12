@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.0.14',
+  version: '1.0.15',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -826,10 +826,10 @@ async handleResume(contextData) {
       }
 
       // Create output filename
-      const baseName = contextData.name.replace(/\.[^/.]+$/, '');
+      const baseName = contextData.name.replace(/\.[^/.]+$/, '').slice(0, 25);
       const fileName = baseName.startsWith('🎞️')
         ? `${baseName}_${requestedExt}.${requestedExt}`
-        : `🎞️ ${baseName}_${requestedExt}-converted.${requestedExt}`;
+        : `🎞️ ${baseName}_(${requestedExt}).${requestedExt}`;
       let downloadOptions = {};
 
       // Setup options based on audio or video format
