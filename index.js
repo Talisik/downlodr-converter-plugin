@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.0.12',
+  version: '1.0.14',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -223,6 +223,42 @@ const formatConverter = {
   },
 
   /**
+   * Update task bar button states without recreating them
+   */
+  async updateTaskBarButtonStates() {
+    // Update button states based on current pause status
+    try {
+      // Update pause button state
+      if (this.api.ui.updateTaskBarItem) {
+        await this.api.ui.updateTaskBarItem('format-converter-pause', {
+          buttonStyle: {
+            border: '1px solid #D1D5DB',
+            cursor: !this.isPaused ? 'pointer' : 'not-allowed',
+            opacity: !this.isPaused ? 1 : 0.5,
+            pointerEvents: !this.isPaused ? 'auto' : 'none',
+          },
+        });
+
+        // Update resume button state
+        await this.api.ui.updateTaskBarItem('format-converter-resume', {
+          buttonStyle: {
+            border: '1px solid #D1D5DB',
+            cursor: this.isPaused ? 'pointer' : 'not-allowed',
+            opacity: this.isPaused ? 1 : 0.5,
+            pointerEvents: this.isPaused ? 'auto' : 'none',
+          },
+        });
+      } else {
+        // Fallback to full replacement if update method doesn't exist
+        await this.replaceTaskBarButtons();
+      }
+    } catch (error) {
+      console.warn('Failed to update button states, falling back to full replacement:', error);
+      await this.replaceTaskBarButtons();
+    }
+  },
+
+  /**
    * Replace the task bar buttons with the conversion status, pause, resume, and stop buttons
    */
   async replaceTaskBarButtons() {
@@ -348,7 +384,7 @@ const formatConverter = {
  */
 async handleResume(contextData) {
   this.isPaused = false;
-  await this.replaceTaskBarButtons();
+  await this.updateTaskBarButtonStates();
 
   const cleanupFormats = ['m4a', 'aac'];
 
@@ -407,7 +443,7 @@ async handleResume(contextData) {
   async handlePause(contextData) {
     this.isPaused = true;
     this.isProcessing = false;
-    await this.replaceTaskBarButtons();
+    await this.updateTaskBarButtonStates();
 
     const result = await this.api.downloads.pauseAllDownloads(contextData);
 
@@ -492,24 +528,19 @@ async handleResume(contextData) {
 
     // Monitor batch completion
     const batchInterval = setInterval(async () => {
-      if (this.isPaused || !this.isProcessing) {
-        clearInterval(batchInterval);
-        return;
-      }
-
       const activeDownloads = this.api.downloads.getActiveDownloads();
 
-      // Replace buttons when downloads start
-      if (!buttonsReplaced && activeDownloads.length > 0) {
+      // Replace buttons when downloads start (only if still processing)
+      if (!buttonsReplaced && activeDownloads.length > 0 && this.isProcessing) {
         await this.replaceTaskBarButtons(currentBatch);
         buttonsReplaced = true;
       }
 
-      // When current batch is complete
+      // When current batch is complete (check even if paused)
       if (buttonsReplaced && activeDownloads.length === 0) {
         clearInterval(batchInterval);
 
-        // Process next batch if there are items remaining
+        // Process next batch if there are items remaining and we're still processing
         if (remainingQueue.length > 0 && !this.isPaused && this.isProcessing) {
           this.api.ui.showNotification({
             title: 'Batch Complete',
@@ -521,13 +552,23 @@ async handleResume(contextData) {
             duration: 3000,
           });
           await this.processBatch();
-        } else if (remainingQueue.length === 0) {
-          this.api.ui.showNotification({
-            title: 'Conversion Complete',
-            message: 'All items have been converted',
-            type: 'default',
-            duration: 3000,
-          });
+        } else {
+          // Clean up regardless of pause state when downloads are done
+          if (remainingQueue.length === 0) {
+            this.api.ui.showNotification({
+              title: 'Conversion Complete',
+              message: 'All items have been converted',
+              type: 'default',
+              duration: 3000,
+            });
+          } else if (this.isPaused) {
+            this.api.ui.showNotification({
+              title: 'Downloads Paused',
+              message: 'Current batch paused. Resume to continue.',
+              type: 'default',
+              duration: 3000,
+            });
+          }
           await this.cleanupState();
           await this.resetTaskBarButtons();
         }
