@@ -61,7 +61,7 @@ const formatConverter = {
     try {
       // Normalize contextData to array format
       let downloadItems = [];
-
+      console.log('Context Data:', contextData);
       if (Array.isArray(contextData)) {
         // Process array from taskbar selection
         downloadItems = contextData
@@ -71,6 +71,7 @@ const formatConverter = {
                 videoUrl: item.id.videoUrl,
                 location: item.id.location,
                 name: this.extractNameFromLocation(item.id.location),
+                transcriptLocation: item.id.transcriptLocation || '',
               };
             }
             return null;
@@ -86,6 +87,7 @@ const formatConverter = {
               name:
                 contextData.name ||
                 this.extractNameFromLocation(contextData.location),
+              transcriptLocation: contextData.transcriptLocation || '',
             },
           ];
         }
@@ -861,6 +863,7 @@ async handleResume(contextData) {
           thumbnails: null,
           getTranscript: false,
           getThumbnail: false,
+          transcriptLocation: contextData?.transcriptLocation || '',
         };
       } else {
         downloadOptions = {
@@ -881,6 +884,7 @@ async handleResume(contextData) {
           getTranscript: false,
           getThumbnail: false,
           duration: videoInfo.duration,
+          transcriptLocation: contextData?.transcriptLocation || '',
         };
       }
       // Start the conversion download
