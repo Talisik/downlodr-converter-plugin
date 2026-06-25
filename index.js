@@ -72,6 +72,10 @@ const formatConverter = {
                 location: item.id.location,
                 name: this.extractNameFromLocation(item.id.location),
                 transcriptLocation: item.id.transcriptLocation || '',
+                getThumbnail: item.id.getThumbnail ?? false,
+                getTranscript: item.id.getTranscript ?? false,
+                thumbnails: item.id.thumbnails ?? null,
+                automaticCaption: item.id.automaticCaption ?? null,
               };
             }
             return null;
@@ -88,6 +92,10 @@ const formatConverter = {
                 contextData.name ||
                 this.extractNameFromLocation(contextData.location),
               transcriptLocation: contextData.transcriptLocation || '',
+              getThumbnail: contextData.getThumbnail ?? false,
+              getTranscript: contextData.getTranscript ?? false,
+              thumbnails: contextData.thumbnails ?? null,
+              automaticCaption: contextData.automaticCaption ?? null,
             },
           ];
         }
@@ -859,10 +867,10 @@ async handleResume(contextData) {
           audioFormatId: formatId,
           extractorKey: videoInfo.data.extractor_key,
           limitRate: '',
-          automaticCaption: null,
-          thumbnails: null,
-          getTranscript: false,
-          getThumbnail: false,
+          automaticCaption: contextData?.automaticCaption ?? null,
+          thumbnails: contextData?.thumbnails ?? null,
+          getTranscript: contextData?.getTranscript ?? false,
+          getThumbnail: contextData?.getThumbnail ?? false,
           transcriptLocation: contextData?.transcriptLocation || '',
         };
       } else {
@@ -879,14 +887,15 @@ async handleResume(contextData) {
           audioFormatId: '',
           extractorKey: videoInfo.data.extractor_key,
           limitRate: '',
-          automaticCaption: null,
-          thumbnails: null,
-          getTranscript: false,
-          getThumbnail: false,
+          automaticCaption: contextData?.automaticCaption ?? null,
+          thumbnails: contextData?.thumbnails ?? null,
+          getTranscript: contextData?.getTranscript ?? false,
+          getThumbnail: contextData?.getThumbnail ?? false,
           duration: videoInfo.duration,
           transcriptLocation: contextData?.transcriptLocation || '',
         };
       }
+      console.log('Download Options:', downloadOptions);
       // Start the conversion download
       await this.api.downloads.addDownload(
         contextData.videoUrl,
