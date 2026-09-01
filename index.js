@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.1.0',
+  version: '1.1.1',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -15,6 +15,33 @@ const formatConverter = {
 
   queueKey: 'formatConverter_queue',
   formatKey: 'formatConverter_format',
+
+  // Session-scoped cache of getInfo() results, keyed by video URL. Every
+  // conversion request re-fetches full yt-dlp metadata to resolve the
+  // target format's formatId, regardless of which output format was
+  // picked -- that fetch is a real network round trip to the source site
+  // (yt-dlp's own extraction/signature-resolution time), not an artificial
+  // delay, and it's paid identically for every format. Caching it means
+  // converting the same video to a second/third format in the same
+  // session reuses the already-fetched format list instead of paying that
+  // network cost again. Cleared implicitly on plugin reload/app restart
+  // (in-memory only) since a stale cached format list would just make a
+  // stale-but-still-valid formatId; yt-dlp re-resolves the actual media
+  // URL fresh on every download regardless of cache age.
+  videoInfoCache: {},
+
+  /**
+   * Fetch video info, reusing a cached result for this URL within the
+   * current session if one exists.
+   */
+  async getCachedVideoInfo(videoUrl) {
+    if (this.videoInfoCache[videoUrl]) {
+      return this.videoInfoCache[videoUrl];
+    }
+    const info = await this.api.downloads.getInfo(videoUrl);
+    this.videoInfoCache[videoUrl] = info;
+    return info;
+  },
 
   /**
    * Plugin initialization
@@ -811,7 +838,7 @@ async handleResume(contextData) {
         duration: 3000,
       });
 
-      const videoInfo = await this.api.downloads.getInfo(contextData.videoUrl);
+      const videoInfo = await this.getCachedVideoInfo(contextData.videoUrl);
 
       // Define file extensions you want to match
       const videoExtensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.m4a', '.mp3'];
