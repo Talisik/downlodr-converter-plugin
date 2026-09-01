@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.1.1',
+  version: '1.2.0',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -16,32 +16,12 @@ const formatConverter = {
   queueKey: 'formatConverter_queue',
   formatKey: 'formatConverter_format',
 
-  // Session-scoped cache of getInfo() results, keyed by video URL. Every
-  // conversion request re-fetches full yt-dlp metadata to resolve the
-  // target format's formatId, regardless of which output format was
-  // picked -- that fetch is a real network round trip to the source site
-  // (yt-dlp's own extraction/signature-resolution time), not an artificial
-  // delay, and it's paid identically for every format. Caching it means
-  // converting the same video to a second/third format in the same
-  // session reuses the already-fetched format list instead of paying that
-  // network cost again. Cleared implicitly on plugin reload/app restart
-  // (in-memory only) since a stale cached format list would just make a
-  // stale-but-still-valid formatId; yt-dlp re-resolves the actual media
-  // URL fresh on every download regardless of cache age.
-  videoInfoCache: {},
-
-  /**
-   * Fetch video info, reusing a cached result for this URL within the
-   * current session if one exists.
-   */
-  async getCachedVideoInfo(videoUrl) {
-    if (this.videoInfoCache[videoUrl]) {
-      return this.videoInfoCache[videoUrl];
-    }
-    const info = await this.api.downloads.getInfo(videoUrl);
-    this.videoInfoCache[videoUrl] = info;
-    return info;
-  },
+  // jobIds of ffmpeg conversions currently in flight (spawned, not yet
+  // completed/cancelled). Replaces polling api.downloads.getActiveDownloads()
+  // -- conversions are no longer downloads at all, they're local ffmpeg
+  // transcodes of the file already on disk -- and is what pause/resume/stop
+  // target directly by jobId instead of operating on the download queue.
+  activeJobIds: new Set(),
 
   /**
    * Plugin initialization
@@ -97,6 +77,7 @@ const formatConverter = {
               return {
                 videoUrl: item.id.videoUrl,
                 location: item.id.location,
+                downloadName: item.id.downloadName || null,
                 name: this.extractNameFromLocation(item.id.location),
                 transcriptLocation: item.id.transcriptLocation || '',
                 getThumbnail: item.id.getThumbnail ?? false,
@@ -110,11 +91,12 @@ const formatConverter = {
           .filter((item) => item !== null);
       } else {
         // Process single item from menu
-        if (contextData && contextData.videoUrl) {
+        if (contextData && contextData.location) {
           downloadItems = [
             {
               videoUrl: contextData.videoUrl,
               location: contextData.location,
+              downloadName: contextData.downloadName || null,
               name:
                 contextData.name ||
                 this.extractNameFromLocation(contextData.location),
@@ -215,29 +197,14 @@ const formatConverter = {
           type: 'default',
           duration: 3000,
         });
+        // Batch conversions run concurrently (local ffmpeg jobs, not a
+        // polled download queue), so the pause/resume/stop controls are
+        // registered up front instead of waiting for a poll to notice
+        // downloads have "started".
+        if (itemsToConvert.length > 1) {
+          await this.replaceTaskBarButtons(itemsToConvert);
+        }
         await this.processBatch();
-      }
-
-      // Replace task bar buttons if there are multiple conversions
-      if (itemsToConvert.length > 1) {
-        let buttonsReplaced = false;
-
-        const interval = setInterval(async () => {
-          const activeDownloads = this.api.downloads.getActiveDownloads();
-
-          // Check first if the download has started to replace the task bar buttons
-          if (!buttonsReplaced && activeDownloads.length > 1) {
-            await this.replaceTaskBarButtons(itemsToConvert);
-            buttonsReplaced = true;
-          }
-
-          // Then, check if all conversions are complete to reset the task bar buttons
-          if (buttonsReplaced && activeDownloads.length === 0) {
-            await this.resetTaskBarButtons();
-            await this.cleanupState();
-            clearInterval(interval);
-          }
-        }, 1000);
       }
     } catch (error) {
       console.error('Error showing format selector:', error);
@@ -413,77 +380,59 @@ const formatConverter = {
     });
   },
 
+  /**
+   * Resume paused conversions. SIGCONT-based: the same ffmpeg processes
+   * that were suspended continue writing the same output file from where
+   * they stopped, so unlike the old yt-dlp-redownload flow there is no
+   * partial/corrupted file to clean up on resume.
+   */
+  async handleResume(contextData) {
+    this.isPaused = false;
+    this.isProcessing = true;
+    await this.updateTaskBarButtonStates();
 
-/**
- * Resume paused conversions if there are items in the queue
- * Now includes automatic cleanup for problematic formats like m4a
- */
-async handleResume(contextData) {
-  this.isPaused = false;
-  await this.updateTaskBarButtonStates();
+    const jobIds = [...this.activeJobIds];
+    const results = await Promise.all(
+      jobIds.map((id) => this.api.utilities.resumeConvertFile(id))
+    );
+    const failed = results.filter((r) => !r.success);
 
-  const cleanupFormats = ['m4a', 'aac'];
-
-  const result = await this.api.downloads.resumeAllDownloadsWithCleanup(cleanupFormats);
-
-  if (result.success) {
-    // success message
-    let message = `${result.resumedCount} conversions resumed successfully`;
-    
-    if (result.cleanupCount > 0) {
-      message += `. Cleaned up ${result.cleanupCount} corrupted file(s)`;
+    if (failed.length === 0) {
+      this.api.ui.showNotification({
+        title: 'Conversions Resumed',
+        message: `${jobIds.length} conversion(s) resumed successfully`,
+        type: 'success',
+        duration: 3000,
+      });
+    } else {
+      this.api.ui.showNotification({
+        title: 'Failed to Resume Conversions',
+        message:
+          failed[0]?.error || 'An error occurred while resuming conversions',
+        type: 'error',
+        duration: 5000,
+      });
     }
-
-    this.api.ui.showNotification({
-      title: 'Conversions Resumed',
-      message: message,
-      type: 'success',
-      duration: 3000,
-    });
-    /*
-    console.log('Resume Results:', {
-      total: result.totalDownloads,
-      resumed: result.resumedCount,
-      failed: result.failedCount,
-      cleanedUp: result.cleanupCount,
-      details: result.results
-    });
-    */
-    // Resume processing the queue if there are items
-    if (!this.isProcessing) {
-      const queue = JSON.parse(sessionStorage.getItem(this.queueKey) || '[]');
-      if (queue.length > 0) {
-        this.isProcessing = true;
-        await this.processBatch();
-      }
-    }
-  } else {
-    let errorMessage = 'An error occurred while resuming conversions';
-    
-    if (result.cleanupCount > 0) {
-      errorMessage += `. ${result.cleanupCount} files were cleaned up, but ${result.failedCount} conversions failed to resume`;
-    }
-
-    this.api.ui.showNotification({
-      title: 'Failed to Resume Conversions',
-      message: errorMessage,
-      type: 'error',
-      duration: 5000,
-    });
-  }
-},
+  },
 
   /**
-   * Pause all ongoing and queued conversions
+   * Pause all in-flight conversions (SIGSTOP the underlying ffmpeg
+   * processes). Queued-but-not-yet-started items in this batch simply
+   * aren't started until resumed -- processBatch checks isPaused/
+   * isProcessing before kicking off each item.
    */
   async handlePause(contextData) {
     this.isPaused = true;
     this.isProcessing = false;
     await this.updateTaskBarButtonStates();
 
-    const result = await this.api.downloads.pauseAllDownloads(contextData);
+    const jobIds = [...this.activeJobIds];
+    const results = await Promise.all(
+      jobIds.map((id) => this.api.utilities.pauseConvertFile(id))
+    );
+    const failed = results.filter((r) => !r.success);
 
-    if (result.success) {
+    if (failed.length === 0) {
       this.api.ui.showNotification({
         title: 'Conversion Paused',
         message: `All ongoing conversion processes have been paused`,
@@ -493,7 +442,8 @@ async handleResume(contextData) {
     } else {
       this.api.ui.showNotification({
         title: 'Failed to pause conversions',
-        message: result.error || `An error occurred while pausing conversions`,
+        message:
+          failed[0]?.error || `An error occurred while pausing conversions`,
         type: 'destructive',
         duration: 3000,
       });
@@ -501,34 +451,37 @@ async handleResume(contextData) {
   },
 
   /**
-   * Stop all ongoing and queued conversions
+   * Stop all ongoing and queued conversions. Kills every in-flight ffmpeg
+   * process and clears the pending queue -- nothing to resume afterward.
    */
   async handleStop(contextData) {
-    const result = await this.api.downloads.stopAllDownloads(contextData);
+    const jobIds = [...this.activeJobIds];
+    await Promise.all(
+      jobIds.map((id) => this.api.utilities.cancelConvertFile(id))
+    );
+    this.activeJobIds.clear();
+    this.isProcessing = false;
+    this.isPaused = false;
 
-    if (result) {
-      await this.cleanupState();
-      this.api.ui.showNotification({
-        title: 'Conversion Stopped',
-        message: `All ongoing conversion processes have been stopped`,
-        type: 'default',
-        duration: 3000,
-      });
-    } else {
-      this.api.ui.showNotification({
-        title: 'Failed to stop conversions',
-        message:
-          result?.error || `An error occurred while stopping conversions`,
-        type: 'destructive',
-        duration: 3000,
-      });
-    }
+    await this.cleanupState();
+    this.api.ui.showNotification({
+      title: 'Conversion Stopped',
+      message: `All ongoing conversion processes have been stopped`,
+      type: 'default',
+      duration: 3000,
+    });
 
     await this.resetTaskBarButtons();
   },
 
   /**
-   * Process conversions in batches of 5
+   * Process conversions in batches of 5, awaiting each batch's ffmpeg jobs
+   * directly instead of polling api.downloads.getActiveDownloads() -- these
+   * are local transcodes, not downloads, so there is nothing in the
+   * download store to poll. If paused, a batch's Promise.allSettled simply
+   * sits blocked on the SIGSTOP'd ffmpeg processes and this function's own
+   * continuation resumes naturally once they're SIGCONT'd, with no
+   * separate restart needed from handleResume.
    */
   async processBatch() {
     if (this.isPaused || !this.isProcessing) {
@@ -551,65 +504,47 @@ async handleResume(contextData) {
 
     // Update status display
     this.downloadItems = currentBatch;
-    let buttonsReplaced = false;
 
-    // Process current batch
-    for (let index = 0; index < currentBatch.length; index++) {
-      if (this.isPaused || !this.isProcessing) {
-        return;
-      }
-      const item = currentBatch[index];
-      this.handleUseYTDLP(item, format);
+    await Promise.allSettled(
+      currentBatch.map((item) => this.handleConvertFile(item, format))
+    );
+
+    if (this.isPaused) {
+      this.api.ui.showNotification({
+        title: 'Downloads Paused',
+        message: 'Current batch paused. Resume to continue.',
+        type: 'default',
+        duration: 3000,
+      });
+      return;
     }
 
-    // Monitor batch completion
-    const batchInterval = setInterval(async () => {
-      const activeDownloads = this.api.downloads.getActiveDownloads();
+    if (!this.isProcessing) {
+      // Stopped mid-batch -- handleStop already cleaned up state/buttons.
+      return;
+    }
 
-      // Replace buttons when downloads start (only if still processing)
-      if (!buttonsReplaced && activeDownloads.length > 0 && this.isProcessing) {
-        await this.replaceTaskBarButtons(currentBatch);
-        buttonsReplaced = true;
-      }
-
-      // When current batch is complete (check even if paused)
-      if (buttonsReplaced && activeDownloads.length === 0) {
-        clearInterval(batchInterval);
-
-        // Process next batch if there are items remaining and we're still processing
-        if (remainingQueue.length > 0 && !this.isPaused && this.isProcessing) {
-          this.api.ui.showNotification({
-            title: 'Batch Complete',
-            message: `Processing next batch of ${Math.min(
-              5,
-              remainingQueue.length
-            )} items`,
-            type: 'default',
-            duration: 3000,
-          });
-          await this.processBatch();
-        } else {
-          // Clean up regardless of pause state when downloads are done
-          if (remainingQueue.length === 0) {
-            this.api.ui.showNotification({
-              title: 'Conversion Complete',
-              message: 'All items have been converted',
-              type: 'default',
-              duration: 3000,
-            });
-          } else if (this.isPaused) {
-            this.api.ui.showNotification({
-              title: 'Downloads Paused',
-              message: 'Current batch paused. Resume to continue.',
-              type: 'default',
-              duration: 3000,
-            });
-          }
-          await this.cleanupState();
-          await this.resetTaskBarButtons();
-        }
-      }
-    }, 1000);
+    if (remainingQueue.length > 0) {
+      this.api.ui.showNotification({
+        title: 'Batch Complete',
+        message: `Processing next batch of ${Math.min(
+          5,
+          remainingQueue.length
+        )} items`,
+        type: 'default',
+        duration: 3000,
+      });
+      await this.processBatch();
+    } else {
+      this.api.ui.showNotification({
+        title: 'Conversion Complete',
+        message: 'All items have been converted',
+        type: 'default',
+        duration: 3000,
+      });
+      await this.cleanupState();
+      await this.resetTaskBarButtons();
+    }
   },
 
   /**
@@ -657,168 +592,49 @@ async handleResume(contextData) {
   },
 
   /**
-   * Generate audio format options based on available formats
+   * Starts a local ffmpeg transcode via api.utilities.startConvertFile and
+   * awaits its completion event, tracking the jobId in activeJobIds for the
+   * duration so pause/resume/stop can target it.
    */
-  createAudioOptions(audioOnlyFormat) {
-    if (!audioOnlyFormat)
-      return [
-        {
-          value: 'audio-0-mp3',
-          label: 'Audio Only (mp3)',
-          formatId: '0',
-          fileExtension: 'mp3',
-        },
-      ];
+  async runConversion(inputPath, outputPath, format) {
+    const { jobId } = await this.api.utilities.startConvertFile({
+      inputPath,
+      outputPath,
+      format,
+    });
+    this.activeJobIds.add(jobId);
 
-    return [
-      {
-        value: `audio-${audioOnlyFormat.format_id}-${
-          audioOnlyFormat.audio_ext || audioOnlyFormat.ext
-        }`,
-        label: `Audio Only (${
-          audioOnlyFormat.audio_ext || audioOnlyFormat.ext
-        }) - ${audioOnlyFormat.format_note || audioOnlyFormat.ext}`,
-        formatId: audioOnlyFormat.format_id,
-        fileExtension: audioOnlyFormat.audio_ext || audioOnlyFormat.ext,
-      },
-      {
-        value: `audio-${audioOnlyFormat.format_id}-mp3`,
-        label: `Audio Only (mp3) - ${
-          audioOnlyFormat.format_note || audioOnlyFormat.ext
-        }`,
-        formatId: audioOnlyFormat.format_id,
-        fileExtension: 'mp3',
-      },
-    ];
-  },
-
-  /**
-   * Find best format options for different format types
-   */
-  processVideoFormats(info) {
-    const formatsArray = info.data.formats || [];
-    const extractorKey = info.data.extractor_key;
-
-    // Find best audio-only format
-    const audioOnlyFormat = formatsArray.find(
-      (format) =>
-        (format.vcodec === 'none' &&
-          format.format &&
-          format.format.includes('audio only')) ||
-        format.resolution === 'audio only' ||
-        (format.vcodec === 'none' && format.acodec !== 'none')
-    );
-
-    // Create audio options
-    const audioOptions = this.createAudioOptions(audioOnlyFormat);
-
-    // Process formats based on extractor (platform)
-    let formatOptions = [];
-    const audioFormatId = audioOnlyFormat ? audioOnlyFormat.format_id : '0';
-
-    if (extractorKey === 'Youtube') {
-      // YouTube logic (audio+video format)
-      const formatMap = new Map();
-      const seenCombinations = new Set();
-
-      formatsArray.forEach((format) => {
-        const resolution = format.resolution;
-        const formatId = format.format_id;
-        let video_ext = format.video_ext || format.ext;
-        const url = format.url;
-        const format_note = format.format_note || resolution;
-
-        if (!resolution || !video_ext || video_ext === 'none' || !url) return;
-
-        const combinationKey = `${video_ext}-${format_note}`;
-
-        if (!seenCombinations.has(combinationKey)) {
-          seenCombinations.add(combinationKey);
-          formatMap.set(formatId, { formatId, video_ext, format_note });
-        }
-      });
-
-      formatOptions = Array.from(formatMap.entries())
-        .flatMap(([_, formatInfo]) => [
-          {
-            value: `${formatInfo.video_ext}-${formatInfo.format_note}`,
-            label: `${formatInfo.video_ext} - ${formatInfo.format_note}`,
-            formatId: `${audioFormatId}+${formatInfo.formatId}`,
-            fileExtension: formatInfo.video_ext,
-          },
-        ])
-        .reverse();
-    } else {
-      // Default logic for other platforms
-      const formatMap = new Map();
-      const seenCombinations = new Set();
-
-      formatsArray.forEach((format) => {
-        const resolution = format.resolution || format.format_id;
-        const formatId = format.format_id;
-        const video_ext = format.ext;
-        const url = format.url;
-        const format_note = format.format_note || resolution || formatId;
-
-        if (!video_ext || !url || (format_note && format_note.includes('DASH')))
-          return;
-
-        const combinationKey = `${video_ext}-${resolution}`;
-
-        if (!seenCombinations.has(combinationKey)) {
-          seenCombinations.add(combinationKey);
-          formatMap.set(formatId, {
-            formatId,
-            video_ext,
-            format_note,
-            resolution,
-          });
-        }
-      });
-
-      formatOptions = Array.from(formatMap.entries())
-        .flatMap(([_, formatInfo]) => {
-          // For non-YouTube, some formats use direct formatId, others use combined format
-          const formatIdToUse = ['Vimeo', 'BiliBili', 'CNN'].includes(
-            extractorKey
-          )
-            ? `${audioFormatId}+${formatInfo.formatId}`
-            : formatInfo.formatId;
-
-          return [
-            {
-              value: `${formatInfo.video_ext}-${formatInfo.resolution}`,
-              label: `${formatInfo.video_ext} - ${formatInfo.resolution}`,
-              formatId: formatIdToUse,
-              fileExtension: formatInfo.video_ext,
-            },
-          ];
-        })
-        .reverse();
-    }
-
-    return {
-      formatOptions,
-      audioOptions,
-      defaultFormatId: formatOptions[0]?.formatId || '',
-      defaultExt: formatOptions[0]?.fileExtension || 'mp4',
-    };
-  },
-
-  /**
-   * Check if extension is audio
-   */
-  isAudioFormat(ext) {
-    const audioExtensions = ['mp3', 'ogg', 'm4a', 'wav', 'flac', 'aac'];
-    return audioExtensions.includes(ext.toLowerCase());
-  },
-
-  /**
-   * Convert video to requested format
-   */
-  async handleUseYTDLP(contextData, requestedExt) {
     try {
-      if (!contextData || !contextData.videoUrl) {
+      return await new Promise((resolve, reject) => {
+        const unsubscribe = this.api.utilities.onConvertFileComplete(
+          (data) => {
+            if (data.jobId !== jobId) return;
+            unsubscribe();
+            if (data.success) {
+              resolve(data);
+            } else {
+              reject(new Error(data.error || 'Conversion failed'));
+            }
+          }
+        );
+      });
+    } finally {
+      this.activeJobIds.delete(jobId);
+    }
+  },
+
+  /**
+   * Convert an already-downloaded local file to the requested format via
+   * ffmpeg. Replaces the old flow of re-downloading the source video
+   * through yt-dlp -- which needed a full yt-dlp metadata re-fetch before
+   * every single conversion, causing a flat ~30s delay before any
+   * conversion visibly started, regardless of which output format was
+   * picked -- with a direct local transcode of the file the user already
+   * has.
+   */
+  async handleConvertFile(contextData, requestedExt) {
+    try {
+      if (!contextData || !contextData.location) {
         console.log('Invalid context data:', contextData);
         this.api.ui.showNotification({
           title: 'Failed to convert format',
@@ -838,8 +654,6 @@ async handleResume(contextData) {
         duration: 3000,
       });
 
-      const videoInfo = await this.getCachedVideoInfo(contextData.videoUrl);
-
       // Define file extensions you want to match
       const videoExtensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.m4a', '.mp3'];
 
@@ -850,100 +664,54 @@ async handleResume(contextData) {
       // Check if the last part is a file (ends with .ext)
       const isFile = videoExtensions.some(ext => lastPart.toLowerCase().endsWith(ext));
 
-      // If it's a file, remove the last portion of the path
-      const directoryPath = isFile
-        ? contextData.location.replace(/[\/\\][^\/\\]*$/, '') // Remove last path segment
-        : contextData.location;
-
-      const finalDirectoryPath = `${directoryPath}/FormatConverter/`;
-      const fileExist = await this.api.downloads.isFolderExist
-      if(!fileExist){
-        const folderCreated = await this.api.downloads.createFolder
-        console.log(folderCreated);
+      let inputPath;
+      let directoryPath;
+      if (isFile) {
+        inputPath = contextData.location;
+        directoryPath = contextData.location.replace(/[\/\\][^\/\\]*$/, ''); // Remove last path segment
+      } else if (contextData.downloadName) {
+        directoryPath = contextData.location;
+        inputPath = `${directoryPath}/${contextData.downloadName}`;
+      } else {
+        throw new Error(
+          'Could not resolve the source file path for conversion.'
+        );
       }
 
+      const finalDirectoryPath = `${directoryPath}/FormatConverter/`;
+
       // Create output filename
-      const baseName = contextData.name.replace(/\.[^/.]+$/, '').slice(0, 25);
+      const baseName = (contextData.name || 'video')
+        .replace(/\.[^/.]+$/, '')
+        .slice(0, 25);
       const fileName = baseName.startsWith('🎞️')
         ? `${baseName}_${requestedExt}.${requestedExt}`
         : `🎞️ ${baseName}_(${requestedExt}).${requestedExt}`;
-      let downloadOptions = {};
+      const outputPath = `${finalDirectoryPath}${fileName}`;
 
-      // Setup options based on audio or video format
-      if (this.isAudioFormat(requestedExt)) {
-        // Find best audio format option
-        const processedFormats = this.processVideoFormats(videoInfo);
-
-        const audioOption =
-          processedFormats.audioOptions.find(
-            (option) => option.fileExtension === requestedExt
-          ) || processedFormats.audioOptions[0];
-
-        const formatId = audioOption ? audioOption.formatId : '0';
-        // Audio download config
-        downloadOptions = {
-          name: fileName,
-          downloadName: fileName,
-          size: 0,
-          speed: '',
-          timeLeft: '',
-          location: finalDirectoryPath,
-          ext: '',
-          formatId: '',
-          audioExt: requestedExt,
-          audioFormatId: formatId,
-          extractorKey: videoInfo.data.extractor_key,
-          limitRate: '',
-          automaticCaption: contextData?.automaticCaption ?? null,
-          thumbnails: contextData?.thumbnails ?? null,
-          getTranscript: contextData?.getTranscript ?? false,
-          getThumbnail: contextData?.getThumbnail ?? false,
-          transcriptLocation: contextData?.transcriptLocation || '',
-        };
-      } else {
-        downloadOptions = {
-          name: fileName,
-          downloadName: fileName,
-          size: 0,
-          speed: '',
-          timeLeft: '',
-          location: finalDirectoryPath,
-          ext: requestedExt,
-          formatId: videoInfo.data.format_id,
-          audioExt: '',
-          audioFormatId: '',
-          extractorKey: videoInfo.data.extractor_key,
-          limitRate: '',
-          automaticCaption: contextData?.automaticCaption ?? null,
-          thumbnails: contextData?.thumbnails ?? null,
-          getTranscript: contextData?.getTranscript ?? false,
-          getThumbnail: contextData?.getThumbnail ?? false,
-          duration: videoInfo.duration,
-          transcriptLocation: contextData?.transcriptLocation || '',
-        };
-      }
-      console.log('Download Options:', downloadOptions);
-      // Start the conversion download
-      await this.api.downloads.addDownload(
-        contextData.videoUrl,
-        downloadOptions
-      );
+      // The host handler creates finalDirectoryPath itself before spawning
+      // ffmpeg, so there's no separate folder-existence check here.
+      await this.runConversion(inputPath, outputPath, requestedExt);
 
       this.api.ui.showNotification({
-        title: 'Conversion Started',
-        message: `Converting to ${requestedExt}: ${baseName}`,
-        type: 'default',
+        title: 'Conversion Complete',
+        message: `Converted to ${requestedExt}: ${baseName}`,
+        type: 'success',
         duration: 3000,
       });
     } catch (error) {
       console.error('Conversion error:', error);
-      this.api.ui.showNotification({
-        title: 'Failed to convert format',
-        message: `Error: ${error.message || error}`,
-        type: 'destructive',
-        duration: 3000,
-      });
-      return;
+      // A cancel (Stop) already shows its own bulk notification -- avoid
+      // piling a redundant per-item error toast on top of it.
+      if (error.message !== 'CANCELLED') {
+        this.api.ui.showNotification({
+          title: 'Failed to convert format',
+          message: `Error: ${error.message || error}`,
+          type: 'destructive',
+          duration: 3000,
+        });
+      }
+      throw error;
     }
   },
 };
