@@ -1,7 +1,7 @@
 const formatConverter = {
   id: 'formatConverter',
   name: 'Format Converter',
-  version: '1.2.0',
+  version: '1.2.1',
   description: 'use formatConverter functions',
   author: 'Downlodr',
 
@@ -130,23 +130,21 @@ const formatConverter = {
         ...item,
         id: item.id || `${item.location}__${item.name}__${idx}`,
       }));
-      console.log(contextData.osType);
-      // Detect operating system and prepare format list
-      const isDarwin = contextData.osType==='macos';
-      console.log(isDarwin);
-      
-      // Base formats array
+      // WebM used to be excluded on macOS here on the assumption the
+      // platform couldn't produce it. That assumption predates the
+      // local-ffmpeg conversion redesign (see handleConvertFile /
+      // runConversion) -- conversion is now always a local transcode via
+      // the bundled ffmpeg binary. Both macOS binaries Downlodr ships
+      // (binaries/ffmpeg-arm64, binaries/ffmpeg-x64) have libvpx (VP8/VP9)
+      // and libopus compiled in, verified directly against the committed
+      // binaries, so there is no macOS-specific reason left to hide WebM.
       let availableFormats = [
         { id: 'mp3', label: 'MP3 (Audio)', value: 'mp3', default: true },
         { id: 'mp4', label: 'MP4 (Video)', value: 'mp4', default: false },
+        { id: 'webm', label: 'WebM (Video)', value: 'webm', default: false },
         { id: 'mkv', label: 'MKV (Video)', value: 'mkv', default: false },
         { id: 'm4a', label: 'M4A (Audio)', value: 'm4a', default: false },
       ];
-
-      // Add WebM format only if not on Darwin (macOS)
-      if (!isDarwin) {
-        availableFormats.splice(2, 0, { id: 'webm', label: 'WebM (Video)', value: 'webm', default: false });
-      }
 
       // Show format selector
       const formatResult = await this.api.ui.showFormatSelector({
