@@ -16,10 +16,10 @@ Whether you need to extract audio from videos, convert between video formats, or
   - MP4 (universal video compatibility)
   - WebM (web-optimized format)
   - MKV (high-quality container format)
-- **Smart format selection** - Automatically detects best available source formats
+- **Smart format selection** - Choose the exact codec/container for your target format
 - **Batch conversion** - Convert multiple files simultaneously from taskbar selection
 - **Organized output** - Saves converted files to dedicated "FormatConverter" subfolder
-- **Platform optimization** - Intelligent handling for YouTube, Vimeo, BiliBili, and other platforms
+- **Local conversion** - Transcodes the file you already downloaded via a local FFmpeg process; no re-download, no source-platform dependency
 - **Quality preservation** - Maintains optimal quality during conversion process
 - **Progress notifications** - Real-time feedback during conversion
 - **Context integration** - Access conversion directly from download context menu and taskbar
@@ -75,24 +75,19 @@ Whether you need to extract audio from videos, convert between video formats, or
 
 The plugin performs the following operations:
 
-- **Format Analysis**: Intelligently analyzes source video formats and quality options
-- **Platform Detection**: Optimizes conversion strategy based on source platform (YouTube, Vimeo, etc.)
-- **Quality Selection**: 
-  - Automatically selects best available audio streams for audio conversion
-  - Chooses optimal video+audio combinations for video formats
-  - Preserves maximum quality while ensuring compatibility
+- **Local Transcoding**: Converts the file already on disk via a local FFmpeg process -- no re-download, no network round trip to the source site
+- **Codec Selection**: Picks appropriate FFmpeg codecs for the requested target format/container (e.g. libx264+aac for MP4/MKV, libvpx+libopus for WebM, libmp3lame for MP3)
 - **File Management**: 
   - Creates organized "FormatConverter" subfolder structure
   - Generates descriptive filenames with format indicators
   - Handles filename conflicts and special characters
-- **Conversion Process**: Utilizes yt-dlp's powerful conversion capabilities for reliable format transformation
+- **Job Control**: Pause/resume suspends and continues the underlying FFmpeg process in place; Stop kills it
 - **Error Handling**: Comprehensive error detection and user-friendly error messages
 
 ## Requirements
 
-- Downlodr v1.3.4+
-- yt-dlp (included with Downlodr)
-- FFmpeg (included with Downlodr for format conversion)
+- Downlodr v1.17.12+ (requires api.utilities.startConvertFile/cancelConvertFile/pauseConvertFile/resumeConvertFile/onConvertFileComplete)
+- FFmpeg (bundled with Downlodr)
 - Write permissions to the download directory
 - Sufficient disk space for converted files
 
@@ -146,6 +141,14 @@ Developed by Downlodr
 
 ## Version History
 
+- 1.2.1
+  - WebM is no longer hidden on macOS -- the exclusion predated local FFmpeg conversion and no longer reflects any real platform limitation
+- 1.2.0
+  - Conversion now transcodes the already-downloaded file locally via FFmpeg instead of re-downloading it through yt-dlp in the target format
+  - Removes the yt-dlp metadata re-fetch that ran before every conversion (the main cause of the multi-second delay before a conversion visibly started)
+  - Pause/Resume now suspend/continue the FFmpeg process directly (SIGSTOP/SIGCONT on macOS/Linux); unsupported on Windows
+- 1.1.1
+  - Cached yt-dlp metadata per video URL for the (now removed in 1.2.0) legacy conversion path
 - 1.0.0 - Initial release
   - Multi-format conversion support (MP3, MP4, WebM, MKV, M4A)
   - Batch conversion capabilities
@@ -156,7 +159,7 @@ Developed by Downlodr
 
 ## Privacy Note
 
-This plugin processes files locally on your device. No data is transmitted to external servers during the conversion process. All conversion operations are performed using local yt-dlp and FFmpeg installations.
+This plugin processes files locally on your device. No data is transmitted to external servers during the conversion process. All conversion operations are performed using the FFmpeg installation bundled with Downlodr.
 
 ## Contributing
 
